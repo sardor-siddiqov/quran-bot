@@ -1,13 +1,17 @@
+import os
 import asyncio
 import logging
 import sqlite3
+from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # --- 1. SOZLAMALAR ---
-BOT_TOKEN = "8726258891:AAH1cHcLUaKLzipyCX3UoUI0p_Fcb4JnTcs"
-ADMIN_ID = 6603429654  # O'zingizning Telegram ID-ingiz
+load_dotenv()  # .env faylidan ma'lumotlarni yuklash
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -54,7 +58,7 @@ def get_all_users():
     return users
 
 
-# --- 3. SURALAR RO'YXATI (114 TA) ---
+# --- 3. SURALAR RO'YXATI ---
 SURA_NAMES = {
     1: "Fotiha", 2: "Baqara", 3: "Oli Imron", 4: "Niso", 5: "Moida", 6: "An'om", 7: "A'rof", 8: "Anfol", 9: "Tavba",
     10: "Yunus", 11: "Hud", 12: "Yusuf", 13: "Ra'd", 14: "Ibrohim", 15: "Hijr", 16: "Nahl", 17: "Isro", 18: "Kahf",
@@ -73,7 +77,7 @@ SURA_NAMES = {
     110: "Nasr", 111: "Masad", 112: "Ixlos", 113: "Falaq", 114: "Nos"
 }
 
-# --- 4. AUDIO ID BAZASI (SIZ YUBORGAN IDLAR) ---
+# --- 4. AUDIO ID BAZASI ---
 AUDIOS = {
     "tilovat": {
         1: "CQACAgQAAxkBAAMLabbjr6LKLkn2SOdpBY1jnga4wzwAAkAOAAMTEFJHFDA3s_1hgDoE",
@@ -315,7 +319,7 @@ def main_menu():
     builder = InlineKeyboardBuilder()
     builder.row(
         types.InlineKeyboardButton(text="🎧 Qur'on tinglash", callback_data="list_tilovat_0"),
-        types.InlineKeyboardButton(text=" 🎧 Qur'on tafsiri", callback_data="list_tafsir_0")
+        types.InlineKeyboardButton(text="🎧 Qur'on tafsiri", callback_data="list_tafsir_0")
     )
     return builder.as_markup()
 
@@ -323,7 +327,7 @@ def main_menu():
 def admin_menu():
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats"))
-    builder.row(types.InlineKeyboardButton(text="🆔 Foydalanuvchilar", callback_data="admin_users"))
+    builder.row(types.InlineKeyboardButton(text="👤 Foydalanuvchilar", callback_data="admin_users"))
     return builder.as_markup()
 
 
@@ -335,8 +339,8 @@ def get_surah_list_keyboard(type_name, page=0):
     end = start + items_per_page
     current_surahs = surah_ids[start:end]
 
+    prefix = "🎧" if type_name == "tilovat" else "🎧"
     for s_id in current_surahs:
-        prefix = "🎧" if type_name == "tilovat" else "🎧"
         builder.add(types.InlineKeyboardButton(
             text=f"{prefix} {s_id:02d}-{SURA_NAMES[s_id]}",
             callback_data=f"play_{type_name}_{s_id}")
@@ -365,8 +369,8 @@ async def start_cmd(message: types.Message):
     start_text = (
         "🌟 Assalomu alaykum va rahmatullohi va barakatuh,\n\n"
         "📖 Qur'on tilovati botiga xush kelibsiz!\n\n"
-        "✅ Botda Qur'on so'zlarini va tafsirini tinglash imkoniyatlari mavjud.\n\n"
-
+        "✅ Botda Qur'on suralarini tinglash va tafsirlari bilan tanishish imkoniyatlari mavjud.\n\n"
+        "☝️ Quyidagi bo'limlardan birini tanlang:"
     )
 
     await message.answer(start_text, reply_markup=main_menu())
@@ -406,7 +410,7 @@ async def show_users_list(callback: types.CallbackQuery):
 async def show_list(callback: types.CallbackQuery):
     _, type_name, page = callback.data.split("_")
     page = int(page)
-    text = "🎧 Qur'on tinglash bo'limi:" if type_name == "tilovat" else "🎧 Qur'on Tafsiri bo'limi:"
+    text = "🎧 Qur'on tinglash bo'limi:" if type_name == "tilovat" else "📚 Qur'on Tafsiri bo'limi:"
     await callback.message.edit_text(text, reply_markup=get_surah_list_keyboard(type_name, page))
 
 
@@ -422,11 +426,11 @@ async def play_audio_handler(callback: types.CallbackQuery):
     file_id = AUDIOS.get(type_name, {}).get(s_id)
 
     if file_id:
-        caption_text = f" {SURA_NAMES[s_id]} surasi\n\n✨Manfaatli bo'lsin: @sakinatli_bot"
+        caption_text = f"✨ {SURA_NAMES[s_id]} surasi\n\nManfaatli bo'lsin: @sakinatli_bot"
         try:
             await callback.message.answer_audio(audio=file_id, caption=caption_text)
             await callback.answer()
-        except Exception as e:
+        except Exception:
             await callback.answer("Audio yuborishda xatolik yuz berdi.", show_alert=True)
     else:
         await callback.answer("Bu audio hali yuklanmagan.", show_alert=True)
