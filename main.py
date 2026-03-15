@@ -6,9 +6,11 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 
 # --- 1. SOZLAMALAR ---
-load_dotenv()  # .env faylidan ma'lumotlarni yuklash
+load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
@@ -17,17 +19,32 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 
-# --- 2. BAZA BILAN ISHLASH (SQLITE) ---
+# Reklama yuborish uchun holat (State)
+class AdState(StatesGroup):
+    waiting_for_ad_content = State()
+
+
 def init_db():
     conn = sqlite3.connect("quran_bot.db")
     cursor = conn.cursor()
+    # Jadvalni yaratish (agar yo'q bo'lsa)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             username TEXT,
-            full_name TEXT
+            full_name TEXT,
+            joined_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Mavjud jadvalga 'joined_at' ustunini qo'shish (agar u bo'lmasa)
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN joined_at DATETIME DEFAULT CURRENT_TIMESTAMP")
+        print("Baza muvaffaqiyatli yangilandi: 'joined_at' ustuni qo'shildi.")
+    except sqlite3.OperationalError:
+        # Agar ustun allaqachon bo'lsa, xatoni o'tkazib yuboramiz
+        pass
+
     conn.commit()
     conn.close()
 
@@ -35,7 +52,8 @@ def init_db():
 def add_user(user_id, username, full_name):
     conn = sqlite3.connect("quran_bot.db")
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users VALUES (?, ?, ?)", (user_id, username, full_name))
+    cursor.execute("INSERT OR IGNORE INTO users (user_id, username, full_name) VALUES (?, ?, ?)",
+                   (user_id, username, full_name))
     conn.commit()
     conn.close()
 
@@ -44,15 +62,27 @@ def get_stats():
     conn = sqlite3.connect("quran_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM users")
-    count = cursor.fetchone()[0]
+    total = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM users WHERE date(joined_at) = date('now')")
+    today = cursor.fetchone()[0]
     conn.close()
-    return count
+    return total, today
 
 
 def get_all_users():
     conn = sqlite3.connect("quran_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, full_name FROM users")
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+    conn.close()
+    return users
+
+
+# --- YANGI QO'SHILGAN: FOYDALANUVCHILAR RO'YXATINI OLISH ---
+def get_detailed_users():
+    conn = sqlite3.connect("quran_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, username FROM users")
     users = cursor.fetchall()
     conn.close()
     return users
@@ -249,7 +279,7 @@ AUDIOS = {
         51: "CQACAgIAAxkBAAIBTmm273SgP4OSWMwlNaDlL3cF2cjeAAKGDQACEToJS3IOtKCs-JTpOgQ",
         52: "CQACAgIAAxkBAAIBUGm273R_2jagLksN0BY8OkZi4NCXAAKHDQACEToJSzAa1_YFAg2UOgQ",
         53: "CQACAgIAAxkBAAIBS2m273QYppdeOZjSTZ5zwevnQ3LSAAKKDQACEToJS__5yrHNVpR-OgQ",
-        54: "CQACAgIAAxkBAAIBTGm273QAAa93qoCN_0kplaUu2i2YMAACiw0AAhE6CUt3q506Ol-khzoE",
+        54: "CQACAgIAAxkBAAIBTGm273QYppdeOZjSTZ5zwevnQ3LSAAKKDQACEToJS__5yrHNVpR-OgQ",
         55: "CQACAgIAAxkBAAIBTWm273S-DtcNr-19XiMta_l2knenAAKMDQACEToJS0Ui7ieIpOioOgQ",
         56: "CQACAgIAAxkBAAIBT2m273TcZy_D-RY-MxxixU2PlIGEAAKNDQACEToJS7ZQwj-1vKhPOgQ",
         57: "CQACAgIAAxkBAAIBUWm273Q38rHZP01-NJ2gl8Rxhs0tAAKODQACEToJS6K_JBBqurGqOgQ",
@@ -324,13 +354,6 @@ def main_menu():
     return builder.as_markup()
 
 
-def admin_menu():
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats"))
-    builder.row(types.InlineKeyboardButton(text="👤 Foydalanuvchilar", callback_data="admin_users"))
-    return builder.as_markup()
-
-
 def get_surah_list_keyboard(type_name, page=0):
     builder = InlineKeyboardBuilder()
     items_per_page = 20
@@ -339,7 +362,7 @@ def get_surah_list_keyboard(type_name, page=0):
     end = start + items_per_page
     current_surahs = surah_ids[start:end]
 
-    prefix = "🎧" if type_name == "tilovat" else "🎧"
+    prefix = "🎧"
     for s_id in current_surahs:
         builder.add(types.InlineKeyboardButton(
             text=f"{prefix} {s_id:02d}-{SURA_NAMES[s_id]}",
@@ -363,49 +386,97 @@ def get_surah_list_keyboard(type_name, page=0):
 
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
-    # Foydalanuvchini bazaga qo'shish
     add_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
-
     start_text = (
         "🌟 Assalomu alaykum va rahmatullohi va barakatuh,\n\n"
         "📖 Qur'on tilovati botiga xush kelibsiz!\n\n"
         "✅ Botda Qur'on suralarini tinglash va tafsirlari bilan tanishish imkoniyatlari mavjud.\n\n"
         "☝️ Quyidagi bo'limlardan birini tanlang:"
     )
-
     await message.answer(start_text, reply_markup=main_menu())
 
 
+# ADMIN PANEL HANDLERLARI
 @dp.message(Command("admin"))
-async def admin_panel_cmd(message: types.Message):
+async def show_admin_panel(message: types.Message):
     if message.from_user.id == ADMIN_ID:
-        await message.answer("🛠 Admin Panel:", reply_markup=admin_menu())
+        builder = InlineKeyboardBuilder()
+        builder.row(types.InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats"))
+        builder.row(types.InlineKeyboardButton(text="📢 Xabar yuborish", callback_data="broadcast"))
+        builder.row(types.InlineKeyboardButton(text="📁 Bazani yuklash", callback_data="download_db"))
+        builder.adjust(1)
+        await message.answer("🛠 Admin Panel:", reply_markup=builder.as_markup())
     else:
         await message.answer("Kechirasiz, bu buyruq faqat bot admini uchun.")
 
 
+# --- YANGILANGAN STATISTIKA HANDLERI ---
 @dp.callback_query(F.data == "admin_stats")
-async def show_stats(callback: types.CallbackQuery):
+async def admin_stats_callback(callback: types.CallbackQuery):
     if callback.from_user.id == ADMIN_ID:
-        count = get_stats()
-        await callback.message.answer(f"📊 Botdan foydalanuvchilar soni: {count} ta")
-        await callback.answer()
+        total, today = get_stats()
+        users = get_detailed_users()
 
+        text = f"📊 **Bot statistikasi:**\n\n"
+        text += f"👥 Jami foydalanuvchilar: {total} ta\n"
+        text += f"📈 Bugun qo'shilganlar: {today} ta\n\n"
+        text += f"📜 **Foydalanuvchilar ro'yxati:**\n"
 
-@dp.callback_query(F.data == "admin_users")
-async def show_users_list(callback: types.CallbackQuery):
-    if callback.from_user.id == ADMIN_ID:
-        users = get_all_users()
-        if not users:
-            await callback.message.answer("Baza bo'sh.")
+        if users:
+            for idx, user in enumerate(users, 1):
+                user_id, username = user
+                # Username bo'lsa @ bilan chiqaradi, bo'lmasa 'Noma'lum' deydi
+                name = f"@{username}" if username else "Noma'lum"
+                text += f"{idx}. ID: `{user_id}` | Nik: {name}\n"
         else:
-            text = "👤 Foydalanuvchilar ro'yxati:\n\n"
-            for u_id, name in users:
-                text += f"🔹 {name} (ID: {u_id})\n"
-            await callback.message.answer(text[:4000])
+            text += "Hozircha foydalanuvchilar yo'q."
+
+        # Telegram limitidan oshib ketmasligi uchun (max 4096 belgi)
+        if len(text) > 4090:
+            text = text[:4000] + "\n... (ro'yxat juda uzun)"
+
+        await callback.message.answer(text, parse_mode="Markdown")
         await callback.answer()
 
 
+@dp.callback_query(F.data == "download_db")
+async def download_db_callback(callback: types.CallbackQuery):
+    if callback.from_user.id == ADMIN_ID:
+        file_path = "quran_bot.db"
+        if os.path.exists(file_path):
+            await callback.message.answer_document(types.FSInputFile(file_path), caption="📁 Bazaning nusxasi")
+        else:
+            await callback.message.answer("❌ Baza fayli topilmadi.")
+        await callback.answer()
+
+
+# REKLAMA / BROADCAST
+@dp.callback_query(F.data == "broadcast")
+async def broadcast_callback(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id == ADMIN_ID:
+        await callback.message.answer(
+            "Hammaga yubormoqchi bo'lgan xabaringizni yuboring (Rasm, matn, video yoki hammasi):")
+        await state.set_state(AdState.waiting_for_ad_content)
+        await callback.answer()
+
+
+@dp.message(AdState.waiting_for_ad_content)
+async def process_broadcast(message: types.Message, state: FSMContext):
+    await state.clear()
+    users = get_all_users()
+    count = 0
+    await message.answer("🚀 Xabar yuborish boshlandi...")
+    for user in users:
+        try:
+            await message.copy_to(chat_id=user[0])
+            count += 1
+            await asyncio.sleep(0.05)  # Limitga tushib qolmaslik uchun
+        except Exception:
+            continue
+    await message.answer(f"✅ Xabar {count} ta foydalanuvchiga muvaffaqiyatli yuborildi.")
+
+
+# ASOSIY BOT HANDLERLARI
 @dp.callback_query(F.data.startswith("list_"))
 async def show_list(callback: types.CallbackQuery):
     _, type_name, page = callback.data.split("_")
@@ -424,9 +495,8 @@ async def play_audio_handler(callback: types.CallbackQuery):
     _, type_name, s_id = callback.data.split("_")
     s_id = int(s_id)
     file_id = AUDIOS.get(type_name, {}).get(s_id)
-
     if file_id:
-        caption_text = f"✨ {SURA_NAMES[s_id]} surasi\n\nManfaatli bo'lsin: @sakinatli_bot"
+        caption_text = f"{SURA_NAMES[s_id]} surasi\n\n✨ Manfaatli bo'lsin: @sakinatli_bot"
         try:
             await callback.message.answer_audio(audio=file_id, caption=caption_text)
             await callback.answer()
