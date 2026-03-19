@@ -12,22 +12,27 @@ from aiogram.fsm.context import FSMContext
 # --- 1. SOZLAMALAR ---
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+ADMIN_ID_STR = os.getenv("ADMIN_ID")
+ADMIN_ID = int(ADMIN_ID_STR) if ADMIN_ID_STR else 0
+
+# Fayl yo'llarini aniqlash (Alwaysdata uchun muhim)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "quran_bot.db")
 
 logging.basicConfig(level=logging.INFO)
+
+# Alwaysdata-da Proxy shart emas, shuning uchun session-siz botni yaratamiz
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-
 
 # Reklama yuborish uchun holat (State)
 class AdState(StatesGroup):
     waiting_for_ad_content = State()
 
-
+# --- 2. MA'LUMOTLAR BAZASI FUNKSIYALARI ---
 def init_db():
-    conn = sqlite3.connect("quran_bot.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    # Jadvalni yaratish (agar yo'q bo'lsa)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -36,30 +41,23 @@ def init_db():
             joined_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-
-    # Mavjud jadvalga 'joined_at' ustunini qo'shish (agar u bo'lmasa)
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN joined_at DATETIME DEFAULT CURRENT_TIMESTAMP")
-        print("Baza muvaffaqiyatli yangilandi: 'joined_at' ustuni qo'shildi.")
     except sqlite3.OperationalError:
-        # Agar ustun allaqachon bo'lsa, xatoni o'tkazib yuboramiz
         pass
-
     conn.commit()
     conn.close()
 
-
 def add_user(user_id, username, full_name):
-    conn = sqlite3.connect("quran_bot.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (user_id, username, full_name) VALUES (?, ?, ?)",
                    (user_id, username, full_name))
     conn.commit()
     conn.close()
 
-
 def get_stats():
-    conn = sqlite3.connect("quran_bot.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM users")
     total = cursor.fetchone()[0]
@@ -68,25 +66,21 @@ def get_stats():
     conn.close()
     return total, today
 
-
 def get_all_users():
-    conn = sqlite3.connect("quran_bot.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users")
     users = cursor.fetchall()
     conn.close()
     return users
 
-
-# --- YANGI QO'SHILGAN: FOYDALANUVCHILAR RO'YXATINI OLISH ---
 def get_detailed_users():
-    conn = sqlite3.connect("quran_bot.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, username FROM users")
     users = cursor.fetchall()
     conn.close()
     return users
-
 
 # --- 3. SURALAR RO'YXATI ---
 SURA_NAMES = {
@@ -107,7 +101,7 @@ SURA_NAMES = {
     110: "Nasr", 111: "Masad", 112: "Ixlos", 113: "Falaq", 114: "Nos"
 }
 
-# --- 4. AUDIO ID BAZASI ---
+# --- 4. AUDIO ID BAZASI (TO'LIQ) ---
 AUDIOS = {
     "tilovat": {
         1: "CQACAgQAAxkBAAMLabbjr6LKLkn2SOdpBY1jnga4wzwAAkAOAAMTEFJHFDA3s_1hgDoE",
@@ -336,13 +330,12 @@ AUDIOS = {
         108: "CQACAgIAAxkBAAIBwmm274_fd8OwFmXH-XqWUFkygNNEAALJDQACEToJS2vKKBDjxaPsOgQ",
         109: "CQACAgIAAxkBAAIBxGm274-H2ZbW5djapNCw_u_ppJIXAALKDQACEToJS29344WkGvO_OgQ",
         110: "CQACAgIAAxkBAAIBx2m2748Z9aAqLYoaRpwtr0Fc8CI2AALLDQACEToJS3LnEweencd8OgQ",
-        111: "CQACAgIAAxkBAAIByGm274_Pgy-hWnStQ8dtCDaIOL-oALMDQACEToJS9v0tcg9J7KpOgQ",
+        111: "CQACAgIAByGm274_Pgy-hWnStQ8dtCDaIOL-oALMDQACEToJS9v0tcg9J7KpOgQ",
         112: "CQACAgIAAxkBAAIBxWm2749UM5WK-X2ZfhBw1uGMwk3NAALNDQACEToJS2_qrHHQjiGGOgQ",
         113: "CQACAgIAAxkBAAIBxmm274-d53L6jzOr6T54UxL5hMkqAALODQACEToJS-1Sx7Pfgck-OgQ",
         114: "CQACAgIAAxkBAAIBDWm27CHPp-jddTHapjEtypbOp1r_AAJnDgACnkOgSCHil1RoJN49OgQ"
     }
 }
-
 
 # --- 5. KEYBOARDLAR ---
 def main_menu():
@@ -353,7 +346,6 @@ def main_menu():
     )
     return builder.as_markup()
 
-
 def get_surah_list_keyboard(type_name, page=0):
     builder = InlineKeyboardBuilder()
     items_per_page = 20
@@ -362,10 +354,9 @@ def get_surah_list_keyboard(type_name, page=0):
     end = start + items_per_page
     current_surahs = surah_ids[start:end]
 
-    prefix = "🎧"
     for s_id in current_surahs:
         builder.add(types.InlineKeyboardButton(
-            text=f"{prefix} {s_id:02d}-{SURA_NAMES[s_id]}",
+            text=f"🎧 {s_id:02d}-{SURA_NAMES[s_id]}",
             callback_data=f"play_{type_name}_{s_id}")
         )
     builder.adjust(2)
@@ -381,7 +372,6 @@ def get_surah_list_keyboard(type_name, page=0):
     builder.row(types.InlineKeyboardButton(text="Asosiy sahifa ♻️", callback_data="back_to_main"))
     return builder.as_markup()
 
-
 # --- 6. HANDLERLAR ---
 
 @dp.message(Command("start"))
@@ -395,8 +385,6 @@ async def start_cmd(message: types.Message):
     )
     await message.answer(start_text, reply_markup=main_menu())
 
-
-# ADMIN PANEL HANDLERLARI
 @dp.message(Command("admin"))
 async def show_admin_panel(message: types.Message):
     if message.from_user.id == ADMIN_ID:
@@ -409,74 +397,51 @@ async def show_admin_panel(message: types.Message):
     else:
         await message.answer("Kechirasiz, bu buyruq faqat bot admini uchun.")
 
-
-# --- YANGILANGAN STATISTIKA HANDLERI ---
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats_callback(callback: types.CallbackQuery):
     if callback.from_user.id == ADMIN_ID:
         total, today = get_stats()
         users = get_detailed_users()
-
-        text = f"📊 **Bot statistikasi:**\n\n"
-        text += f"👥 Jami foydalanuvchilar: {total} ta\n"
-        text += f"📈 Bugun qo'shilganlar: {today} ta\n\n"
-        text += f"📜 **Foydalanuvchilar ro'yxati:**\n"
-
+        text = f"📊 **Bot statistikasi:**\n\n👥 Jami foydalanuvchilar: {total} ta\n📈 Bugun qo'shilganlar: {today} ta\n\n📜 **Foydalanuvchilar ro'yxati:**\n"
         if users:
             for idx, user in enumerate(users, 1):
                 user_id, username = user
-                # Username bo'lsa @ bilan chiqaradi, bo'lmasa 'Noma'lum' deydi
                 name = f"@{username}" if username else "Noma'lum"
                 text += f"{idx}. ID: `{user_id}` | Nik: {name}\n"
-        else:
-            text += "Hozircha foydalanuvchilar yo'q."
-
-        # Telegram limitidan oshib ketmasligi uchun (max 4096 belgi)
-        if len(text) > 4090:
-            text = text[:4000] + "\n... (ro'yxat juda uzun)"
-
+        if len(text) > 4090: text = text[:4000] + "\n... (ro'yxat juda uzun)"
         await callback.message.answer(text, parse_mode="Markdown")
         await callback.answer()
-
 
 @dp.callback_query(F.data == "download_db")
 async def download_db_callback(callback: types.CallbackQuery):
     if callback.from_user.id == ADMIN_ID:
-        file_path = "quran_bot.db"
-        if os.path.exists(file_path):
-            await callback.message.answer_document(types.FSInputFile(file_path), caption="📁 Bazaning nusxasi")
+        if os.path.exists(DB_PATH):
+            await callback.message.answer_document(types.FSInputFile(DB_PATH), caption="📁 Bazaning nusxasi")
         else:
             await callback.message.answer("❌ Baza fayli topilmadi.")
         await callback.answer()
 
-
-# REKLAMA / BROADCAST
 @dp.callback_query(F.data == "broadcast")
 async def broadcast_callback(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id == ADMIN_ID:
-        await callback.message.answer(
-            "Hammaga yubormoqchi bo'lgan xabaringizni yuboring (Rasm, matn, video yoki hammasi):")
+        await callback.message.answer("Xabaringizni yuboring:")
         await state.set_state(AdState.waiting_for_ad_content)
         await callback.answer()
-
 
 @dp.message(AdState.waiting_for_ad_content)
 async def process_broadcast(message: types.Message, state: FSMContext):
     await state.clear()
     users = get_all_users()
     count = 0
-    await message.answer("🚀 Xabar yuborish boshlandi...")
+    msg = await message.answer("🚀 Xabar yuborish boshlandi...")
     for user in users:
         try:
             await message.copy_to(chat_id=user[0])
             count += 1
-            await asyncio.sleep(0.05)  # Limitga tushib qolmaslik uchun
-        except Exception:
-            continue
-    await message.answer(f"✅ Xabar {count} ta foydalanuvchiga muvaffaqiyatli yuborildi.")
+            await asyncio.sleep(0.05)
+        except: continue
+    await msg.edit_text(f"✅ Xabar {count} ta foydalanuvchiga yuborildi.")
 
-
-# ASOSIY BOT HANDLERLARI
 @dp.callback_query(F.data.startswith("list_"))
 async def show_list(callback: types.CallbackQuery):
     _, type_name, page = callback.data.split("_")
@@ -484,11 +449,9 @@ async def show_list(callback: types.CallbackQuery):
     text = "🎧 Qur'on tinglash bo'limi:" if type_name == "tilovat" else "📚 Qur'on Tafsiri bo'limi:"
     await callback.message.edit_text(text, reply_markup=get_surah_list_keyboard(type_name, page))
 
-
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main(callback: types.CallbackQuery):
     await callback.message.edit_text("Asosiy bo'limni tanlang:", reply_markup=main_menu())
-
 
 @dp.callback_query(F.data.startswith("play_"))
 async def play_audio_handler(callback: types.CallbackQuery):
@@ -496,30 +459,24 @@ async def play_audio_handler(callback: types.CallbackQuery):
     s_id = int(s_id)
     file_id = AUDIOS.get(type_name, {}).get(s_id)
     if file_id:
-        caption_text = f"{SURA_NAMES[s_id]} surasi\n\n✨ Manfaatli bo'lsin: @sakinatli_bot"
+        caption_text = f"{SURA_NAMES[s_id]} surasi\n\n✨ Manfaatli bo'lsin"
         try:
             await callback.message.answer_audio(audio=file_id, caption=caption_text)
             await callback.answer()
-        except Exception:
-            await callback.answer("Audio yuborishda xatolik yuz berdi.", show_alert=True)
+        except:
+            await callback.answer("Xatolik yuz berdi.", show_alert=True)
     else:
-        await callback.answer("Bu audio hali yuklanmagan.", show_alert=True)
-
-
-@dp.message(F.audio)
-async def get_audio_id(message: types.Message):
-    await message.reply(f"Fayl: {message.audio.file_name}\nID: {message.audio.file_id}")
-
+        await callback.answer("Audio topilmadi.", show_alert=True)
 
 # --- 7. ISHGA TUSHIRISH ---
 async def main():
     init_db()
-    print("Bot muvaffaqiyatli ishga tushdi...")
+    logging.info("Bot ishga tushdi...")
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        print("Bot to'xtatildi.")
+        logging.info("Bot to'xtatildi.")
