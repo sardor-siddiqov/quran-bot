@@ -8,6 +8,7 @@ from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+# from aiogram.client.session.aiohttp import AiohttpSession
 
 # --- 1. SOZLAMALAR ---
 load_dotenv()
@@ -15,21 +16,20 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID_STR = os.getenv("ADMIN_ID")
 ADMIN_ID = int(ADMIN_ID_STR) if ADMIN_ID_STR else 0
 
-# Fayl yo'llarini aniqlash (Alwaysdata uchun muhim)
+# Fayl yo'llari (Alwaysdata uchun)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "quran_bot.db")
 
 logging.basicConfig(level=logging.INFO)
-
-# Alwaysdata-da Proxy shart emas, shuning uchun session-siz botni yaratamiz
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Reklama yuborish uchun holat (State)
+
 class AdState(StatesGroup):
     waiting_for_ad_content = State()
 
-# --- 2. MA'LUMOTLAR BAZASI FUNKSIYALARI ---
+
+# --- 2. MA'LUMOTLAR BAZASI ---
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -42,19 +42,26 @@ def init_db():
         )
     """)
     try:
-        cursor.execute("ALTER TABLE users ADD COLUMN joined_at DATETIME DEFAULT CURRENT_TIMESTAMP")
+        cursor.execute("ALTER TABLE users ADD COLUMN full_name TEXT")
     except sqlite3.OperationalError:
         pass
     conn.commit()
     conn.close()
 
+
 def add_user(user_id, username, full_name):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, username, full_name) VALUES (?, ?, ?)",
-                   (user_id, username, full_name))
+    cursor.execute("""
+        INSERT INTO users (user_id, username, full_name) 
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            username = excluded.username,
+            full_name = excluded.full_name
+    """, (user_id, username, full_name))
     conn.commit()
     conn.close()
+
 
 def get_stats():
     conn = sqlite3.connect(DB_PATH)
@@ -66,6 +73,7 @@ def get_stats():
     conn.close()
     return total, today
 
+
 def get_all_users():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -74,15 +82,17 @@ def get_all_users():
     conn.close()
     return users
 
+
 def get_detailed_users():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, username FROM users")
+    cursor.execute("SELECT user_id, username, full_name FROM users")
     users = cursor.fetchall()
     conn.close()
     return users
 
-# --- 3. SURALAR RO'YXATI ---
+
+# --- 3. SURALAR VA AUDIO BAZASI ---
 SURA_NAMES = {
     1: "Fotiha", 2: "Baqara", 3: "Oli Imron", 4: "Niso", 5: "Moida", 6: "An'om", 7: "A'rof", 8: "Anfol", 9: "Tavba",
     10: "Yunus", 11: "Hud", 12: "Yusuf", 13: "Ra'd", 14: "Ibrohim", 15: "Hijr", 16: "Nahl", 17: "Isro", 18: "Kahf",
@@ -101,7 +111,6 @@ SURA_NAMES = {
     110: "Nasr", 111: "Masad", 112: "Ixlos", 113: "Falaq", 114: "Nos"
 }
 
-# --- 4. AUDIO ID BAZASI (TO'LIQ) ---
 AUDIOS = {
     "tilovat": {
         1: "CQACAgQAAxkBAAMLabbjr6LKLkn2SOdpBY1jnga4wzwAAkAOAAMTEFJHFDA3s_1hgDoE",
@@ -214,9 +223,9 @@ AUDIOS = {
         108: "CQACAgIAAxkBAAP9abbsBjsMVDzuDy7ZfA2b9Kq4E-cAAmAOAAKeQ6BI9Vh3Ys4qz-Q6BA",
         109: "CQACAgIAAxkBAAP-abbsBs5wk4hqRQM6_rEPbLWZjToAAmEOAAKeQ6BI7UaTe1lV4A46BA",
         110: "CQACAgIAAxkBAAP_abbsBrqHO3zpbMpD0r5MukBZWYcAAmIOAAKeQ6BIkng-dsrpZ946BA",
-        111: "CQACAgIAAxkBAAIBCmm27CHly4CN-FUHNqdY5dDf0UDYAAJjDgACnkOgSP8zCOIt-mmfOgQ",
-        112: "CQACAgIAAxkBAAIBC2m27CFUKctCfqwEJ1V32aiknvp9AAJlDgACnkOgSFJN0if0k5urOgQ",
-        113: "CQACAgIAAxkBAAIBDGm27CFCVrZf_4Nb6kggbi0Zd4qtAAJmDgACnkOgSINptk3sE0wnOgQ",
+        111: "CQACAgIAByGm274_Pgy-hWnStQ8dtCDaIOL-oALMDQACEToJS9v0tcg9J7KpOgQ",
+        112: "CQACAgIAAxkBAAIBxWm2749UM5WK-X2ZfhBw1uGMwk3NAALNDQACEToJS2_qrHHQjiGGOgQ",
+        113: "CQACAgIAAxkBAAIBxmm274-d53L6jzOr6T54UxL5hMkqAALODQACEToJS-1Sx7Pfgck-OgQ",
         114: "CQACAgIAAxkBAAIBDWm27CHPp-jddTHapjEtypbOp1r_AAJnDgACnkOgSCHil1RoJN49OgQ",
     },
     "tafsir": {
@@ -226,7 +235,7 @@ AUDIOS = {
         4: "CQACAgIAAxkBAAIBHWm273Q4SrG6wAM32G7P96zFXUqOAAJKDQACEToJS3YvQoRtjWjEOgQ",
         5: "CQACAgIAAxkBAAIBHmm273Q9_fuwLEaeqNVAeQABvmZr7QACTQ0AAhE6CUs_i7SHZeUaNzoE",
         6: "CQACAgIAAxkBAAIBH2m273RZGS_bvk3JpbPpixE-vC8oAAJPDQACEToJS1eA_ri6YC_iOgQ",
-        7: "CQACAgIAAxkBAAIBIGm273R8ib--7sm5Lm-5LcGaCZqfAAJSDQACEToJS5lghHbylbLSOgQ",
+        7: "CQACAgIAAxkBAAIBIGm273R8ib--7sm5Lm-5LcGaCZqfAAJSDQACEToJS5ghHbylbLSOgQ",
         8: "CQACAgIAAxkBAAIBIWm273QdYeKkaqAzJIpHsI-RBh9lAAJTDQACEToJSws1Yv9N9_C8OgQ",
         9: "CQACAgIAAxkBAAIBImm273SbNe0-0mmxDvewSXV2nsbZAAJUDQACEToJSx3YrLQ05WiDOgQ",
         10: "CQACAgIAAxkBAAIBI2m273QHlq4ry-kVShjqZJmfAi-WAAJVDQACEToJS-qH7tRlwFePOgQ",
@@ -316,35 +325,37 @@ AUDIOS = {
         94: "CQACAgIAAxkBAAIBdGm273Tysn_ijNYVabr32YqobWbJAAK6DQACEToJSyG-LxwnmxIEOgQ",
         95: "CQACAgIAAxkBAAIBdmm273RFOZZ5D7G3uHhrzVISpy41AAK7DQACEToJS5Yecw4G2fWBOgQ",
         96: "CQACAgIAAxkBAAIBemm273SH-dvQVmLvJw1kLzZwIoqgAAK8DQACEToJS96JV2DSBAGROgQ",
-        97: "CQACAgIAAxkBAAIBeWm273SQRv9vkW-V_AABRwKwmtouzAACvQ0AAhE6CUsEW1x9NmsXNToE",
-        98: "CQACAgIAAxkBAAIBe2m273SlWwdRrIZjSZkmeoVY5eNTAAK-DQACEToJS1HQtjc6sKxPOgQ",
-        99: "CQACAgIAAxkBAAIBeGm273RieLvIjDXQRXJW1_t2BsybAAK_DQACEToJS619EYS9axoqOgQ",
-        100: "CQACAgIAAxkBAAIBfGm273T9p2bq46b3qRg6gkOYWykXAALBDQACEToJS80AATvBi8-lwToE",
-        101: "CQACAgIAAxkBAAIBfWm273Q4Tu6_ynRYTzOPb2DFcfEZAALCDQACEToJS3DQhYR9VC-cOgQ",
-        102: "CQACAgIAAxkBAAIBvWm274_p3h_ykR8QDcFqsAuIE8uNAALDDQACEToJSx2Kjb-KI1TBOgQ",
-        103: "CQACAgIAAxkBAAIBvmm274-R2SMZ4H2xc14LiZkSYvaAAALEDQACEToJS5ZADJQyBdsqOgQ",
-        104: "CQACAgIAAxkBAAIBv2m2748OlJc4UlMBCcv8XLsoIOkzAALFDQACEToJSxtEd3Cr9_uzOgQ",
-        105: "CQACAgIAAxkBAAIBw2m2749ViDWgbKrSo1wpNaeTCLSzAALGDQACEToJS6m1kn5q0jcOgQ",
-        106: "CQACAgIAAxkBAAIBwGm2749lbSaVjhVXlcIxIH9nXriSAALHDQACEToJS3vcP2CRlqPhOgQ",
-        107: "CQACAgIAAxkBAAIBwWm274-DFbVdfL5OpU5B72lySa8WAALIDQACEToJS7DmASPWHmqIOgQ",
-        108: "CQACAgIAAxkBAAIBwmm274_fd8OwFmXH-XqWUFkygNNEAALJDQACEToJS2vKKBDjxaPsOgQ",
-        109: "CQACAgIAAxkBAAIBxGm274-H2ZbW5djapNCw_u_ppJIXAALKDQACEToJS29344WkGvO_OgQ",
-        110: "CQACAgIAAxkBAAIBx2m2748Z9aAqLYoaRpwtr0Fc8CI2AALLDQACEToJS3LnEweencd8OgQ",
+        97: "CQACAgIAAIBeWm273SQRv9vkW-V_AABRwKwmtouzAACvQ0AAhE6CUsEW1x9NmsXNToE",
+        98: "CQACAgIAAIBe2m273SlWwdRrIZjSZkmeoVY5eNTAAK-DQACEToJS1HQtjc6sKxPOgQ",
+        99: "CQACAgIAAIBeGm273RieLvIjDXQRXJW1_t2BsybAAK_DQACEToJS619EYS9axoqOgQ",
+        100: "CQACAgIAAIBfGm273T9p2bq46b3qRg6gkOYWykXAALBDQACEToJS80AATvBi8-lwToE",
+        101: "CQACAgIAAIBfWm273Q4Tu6_ynRYTzOPb2DFcfEZAALCDQACEToJS3DQhYR9VC-cOgQ",
+        102: "CQACAgIAAIBvWm274_p3h_ykR8QDcFqsAuIE8uNAALDDQACEToJSx2Kjb-KI1TBOgQ",
+        103: "CQACAgIAAIBvmm274-R2SMZ4H2xc14LiZkSYvaAAALEDQACEToJS5ZADJQyBdsqOgQ",
+        104: "CQACAgIAAIBv2m2748OlJc4UlMBCcv8XLsoIOkzAALFDQACEToJSxtEd3Cr9_uzOgQ",
+        105: "CQACAgIAAIBw2m2749ViDWgbKrSo1wpNaeTCLSzAALGDQACEToJS6m1kn5q0jcOgQ",
+        106: "CQACAgIAAIBwGm2749lbSaVjhVXlcIxIH9nXriSAALHDQACEToJS3vcP2CRlqPhOgQ",
+        107: "CQACAgIAAIBwWm274-DFbVdfL5OpU5B72lySa8WAALIDQACEToJS7DmASPWHmqIOgQ",
+        108: "CQACAgIAAIBwmm274_fd8OwFmXH-XqWUFkygNNEAALJDQACEToJS2vKKBDjxaPsOgQ",
+        109: "CQACAgIAAIBxGm274-H2ZbW5djapNCw_u_ppJIXAALKDQACEToJS29344WkGvO_OgQ",
+        110: "CQACAgIAAIBx2m2748Z9aAqLYoaRpwtr0Fc8CI2AALLDQACEToJS3LnEweencd8OgQ",
         111: "CQACAgIAByGm274_Pgy-hWnStQ8dtCDaIOL-oALMDQACEToJS9v0tcg9J7KpOgQ",
         112: "CQACAgIAAxkBAAIBxWm2749UM5WK-X2ZfhBw1uGMwk3NAALNDQACEToJS2_qrHHQjiGGOgQ",
         113: "CQACAgIAAxkBAAIBxmm274-d53L6jzOr6T54UxL5hMkqAALODQACEToJS-1Sx7Pfgck-OgQ",
-        114: "CQACAgIAAxkBAAIBDWm27CHPp-jddTHapjEtypbOp1r_AAJnDgACnkOgSCHil1RoJN49OgQ"
+        114: "CQACAgIAAxkBAAIBDWm27CHPp-jddTHapjEtypbOp1r_AAJnDgACnkOgSCHil1RoJN49OgQ",
     }
 }
 
-# --- 5. KEYBOARDLAR ---
+
+# --- 4. KEYBOARDLAR ---
 def main_menu():
     builder = InlineKeyboardBuilder()
     builder.row(
         types.InlineKeyboardButton(text="🎧 Qur'on tinglash", callback_data="list_tilovat_0"),
-        types.InlineKeyboardButton(text="🎧 Qur'on tafsiri", callback_data="list_tafsir_0")
+        types.InlineKeyboardButton(text="📚 Qur'on tafsiri", callback_data="list_tafsir_0")
     )
     return builder.as_markup()
+
 
 def get_surah_list_keyboard(type_name, page=0):
     builder = InlineKeyboardBuilder()
@@ -372,7 +383,8 @@ def get_surah_list_keyboard(type_name, page=0):
     builder.row(types.InlineKeyboardButton(text="Asosiy sahifa ♻️", callback_data="back_to_main"))
     return builder.as_markup()
 
-# --- 6. HANDLERLAR ---
+
+# --- 5. HANDLERLAR ---
 
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
@@ -385,6 +397,7 @@ async def start_cmd(message: types.Message):
     )
     await message.answer(start_text, reply_markup=main_menu())
 
+
 @dp.message(Command("admin"))
 async def show_admin_panel(message: types.Message):
     if message.from_user.id == ADMIN_ID:
@@ -394,53 +407,72 @@ async def show_admin_panel(message: types.Message):
         builder.row(types.InlineKeyboardButton(text="📁 Bazani yuklash", callback_data="download_db"))
         builder.adjust(1)
         await message.answer("🛠 Admin Panel:", reply_markup=builder.as_markup())
-    else:
-        await message.answer("Kechirasiz, bu buyruq faqat bot admini uchun.")
+
 
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats_callback(callback: types.CallbackQuery):
     if callback.from_user.id == ADMIN_ID:
         total, today = get_stats()
         users = get_detailed_users()
-        text = f"📊 **Bot statistikasi:**\n\n👥 Jami foydalanuvchilar: {total} ta\n📈 Bugun qo'shilganlar: {today} ta\n\n📜 **Foydalanuvchilar ro'yxati:**\n"
+        text = f"📊 <b>Bot statistikasi:</b>\n\n👥 Jami foydalanuvchilar: {total} ta\n📈 Bugun qo'shilganlar: {today} ta\n\n📜 <b>Foydalanuvchilar ro'yxati:</b>\n"
+
         if users:
             for idx, user in enumerate(users, 1):
-                user_id, username = user
-                name = f"@{username}" if username else "Noma'lum"
-                text += f"{idx}. ID: `{user_id}` | Nik: {name}\n"
-        if len(text) > 4090: text = text[:4000] + "\n... (ro'yxat juda uzun)"
-        await callback.message.answer(text, parse_mode="Markdown")
+                user_id = user[0]
+                username = user[1] if len(user) > 1 else None
+                full_name = user[2] if len(user) > 2 else None
+
+                if username:
+                    display_name = f"@{username}"
+                elif full_name:
+                    display_name = full_name
+                else:
+                    display_name = f"ID: {user_id}"
+
+                line = f"{idx}. <code>{user_id}</code> | {display_name}\n"
+                if len(text) + len(line) < 4000:
+                    text += line
+                else:
+                    text += "... (ro'yxat juda uzun)"
+                    break
+
+        await callback.message.answer(text, parse_mode="HTML")
         await callback.answer()
+
 
 @dp.callback_query(F.data == "download_db")
 async def download_db_callback(callback: types.CallbackQuery):
     if callback.from_user.id == ADMIN_ID:
         if os.path.exists(DB_PATH):
-            await callback.message.answer_document(types.FSInputFile(DB_PATH), caption="📁 Bazaning nusxasi")
+            await callback.message.answer_document(types.FSInputFile(DB_PATH), caption="📁 Baza nusxasi")
         else:
             await callback.message.answer("❌ Baza fayli topilmadi.")
         await callback.answer()
 
+
 @dp.callback_query(F.data == "broadcast")
 async def broadcast_callback(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id == ADMIN_ID:
-        await callback.message.answer("Xabaringizni yuboring:")
+        await callback.message.answer("Reklama xabarini yuboring (rasm, video yoki matn):")
         await state.set_state(AdState.waiting_for_ad_content)
         await callback.answer()
+
 
 @dp.message(AdState.waiting_for_ad_content)
 async def process_broadcast(message: types.Message, state: FSMContext):
     await state.clear()
     users = get_all_users()
     count = 0
-    msg = await message.answer("🚀 Xabar yuborish boshlandi...")
+    status = await message.answer("🚀 Tarqatilmoqda...")
     for user in users:
         try:
             await message.copy_to(chat_id=user[0])
             count += 1
             await asyncio.sleep(0.05)
-        except: continue
-    await msg.edit_text(f"✅ Xabar {count} ta foydalanuvchiga yuborildi.")
+        except:
+            continue
+    await status.edit_text(f"✅ Xabar {count} ta foydalanuvchiga yuborildi.")
+
 
 @dp.callback_query(F.data.startswith("list_"))
 async def show_list(callback: types.CallbackQuery):
@@ -449,31 +481,62 @@ async def show_list(callback: types.CallbackQuery):
     text = "🎧 Qur'on tinglash bo'limi:" if type_name == "tilovat" else "📚 Qur'on Tafsiri bo'limi:"
     await callback.message.edit_text(text, reply_markup=get_surah_list_keyboard(type_name, page))
 
+
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main(callback: types.CallbackQuery):
     await callback.message.edit_text("Asosiy bo'limni tanlang:", reply_markup=main_menu())
 
+
 @dp.callback_query(F.data.startswith("play_"))
 async def play_audio_handler(callback: types.CallbackQuery):
-    _, type_name, s_id = callback.data.split("_")
-    s_id = int(s_id)
-    file_id = AUDIOS.get(type_name, {}).get(s_id)
-    if file_id:
-        caption_text = f"{SURA_NAMES[s_id]} surasi\n\n✨ Manfaatli bo'lsin"
-        try:
-            await callback.message.answer_audio(audio=file_id, caption=caption_text)
-            await callback.answer()
-        except:
-            await callback.answer("Xatolik yuz berdi.", show_alert=True)
-    else:
-        await callback.answer("Audio topilmadi.", show_alert=True)
+    try:
+        # Callback ma'lumotlarini ajratib olish
+        data = callback.data.split("_")
+        type_name = data[1]
+        s_id = int(data[2])
 
-# --- 7. ISHGA TUSHIRISH ---
+        # Audio ID-sini olish
+        file_id = AUDIOS.get(type_name, {}).get(s_id)
+
+        if file_id:
+            caption_text = f"<b>{SURA_NAMES[s_id]}</b> surasi\n\n✨ Manfaatli bo'lsin"
+            # Audioni yuborish
+            await callback.message.answer_audio(
+                audio=file_id,
+                caption=caption_text,
+                parse_mode="HTML"
+            )
+            await callback.answer()
+        else:
+            await callback.answer("Audio hali qo'shilmagan.", show_alert=True)
+
+    except Exception as e:
+        # Terminalda xatoni ko'rish uchun (BU JUDA MUHIM)
+        print(f"Xatolik yuz berdi: {e}")
+        await callback.answer(f"Xatolik: {e}", show_alert=True)
+
+
+@dp.message(F.audio)
+async def get_audio_file_id(message: types.Message):
+    file_id = message.audio.file_id
+    # Audio sarlavhasi (title) yoki fayl nomi
+    audio_name = message.audio.title or message.audio.file_name or "Noma'lum sura"
+
+    response_text = (
+        f"🎧 <b>Audio nomi:</b> {audio_name}\n"
+        f"🆔 <b>Sura ID-si:</b>\n"
+        f"<code>{file_id}</code>"
+    )
+
+    await message.answer(response_text, parse_mode="HTML")
+
+# --- 6. ISHGA TUSHIRISH ---
 async def main():
     init_db()
     logging.info("Bot ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     try:
